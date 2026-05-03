@@ -1,0 +1,786 @@
+\documentclass[aspectratio=169]{beamer}
+\usetheme{Madrid}
+\useoutertheme{miniframes}
+\usecolortheme{default}
+
+\usepackage{amsmath,amssymb,bm}
+\usepackage{mathtools}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage[most]{tcolorbox}
+\pgfplotsset{compat=1.18}
+\usetikzlibrary{arrows.meta,positioning,calc}
+
+
+\title{Tutorial 13: EKF for Quadruped State Estimation}
+\subtitle{Athletic Intelligence in Robotics (AIR) Course}
+\author{Mihaela Popescu}
+\date{06.05.2026}
+
+\AtBeginSection[]{
+	\begin{frame}[plain]
+		\centering
+		\tableofcontents[currentsection,sectionstyle=show/shaded,subsectionstyle=hide]
+	\end{frame}
+}
+
+\begin{document}
+
+\begin{frame}
+	\titlepage
+\end{frame}
+
+\begin{frame}
+	\frametitle{Outline}
+	\tableofcontents
+\end{frame}
+
+\section{Introduction}
+\begin{frame}
+	\frametitle{Tutorial Goal}
+	
+	\begin{itemize}
+		\item Implement an EKF for quadruped state estimation.
+		\item Fuse:
+		\begin{itemize}
+			\item IMU measurements for prediction.
+			\item Stance-foot contacts for correction.
+		\end{itemize}
+		\item Study the effect of:
+		\begin{itemize}
+			\item IMU noise
+			\item IMU bias
+			\item foot slip
+			\item process and measurement noise tuning
+			\item missing contacts / flight phases
+		\end{itemize}
+	\end{itemize}
+	
+	\begin{block}{Main idea}
+		IMU integration predicts motion, while stance feet provide temporary world-frame anchors that reduce drift.
+	\end{block}
+	
+\end{frame}
+
+\section{EKF Description}
+\begin{frame}
+	\frametitle{State Representation in the EKF}
+	
+	\begin{itemize}
+		\item The EKF maintains an estimate of the system state:
+		\[
+		\hat{x} =
+		\left[
+		R_{WB},\;
+		v_W,\;
+		p_W,\;
+		p^{(1)}_{F,W},\;
+		p^{(2)}_{F,W},\;
+		\ldots
+		\right]
+		\]
+		
+		\item $R_{WB} \in \mathrm{SO}(3)$: rotation from body frame $\{B\}$ to world frame $\{W\}$.
+		\item $v_W$: base velocity in world frame.
+		\item $p_W$: base position in world frame.
+		\item $p^{(i)}_{F,W}$: world-frame position of foot $i$ during stance.
+		
+		\vspace{0.2cm}
+		
+		\item The covariance is defined over an \textbf{error (perturbation) state}:
+		\[
+		\delta x =
+		\left[
+		\delta\theta,\;
+		\delta v,\;
+		\delta p,\;
+		\delta p^{(1)}_F,\;
+		\delta p^{(2)}_F,\;
+		\ldots
+		\right]
+		\]
+		
+		\item $\delta\theta \in \mathbb{R}^3$ is a \textbf{minimal representation of orientation error} on $\mathrm{SO}(3)$.
+	\end{itemize}
+	
+\end{frame}
+
+\begin{frame}
+	\frametitle{Contact-Dependent Foot States}
+	
+	\begin{itemize}
+		\item Foot states are added only when a foot enters contact.
+		\item When a foot is in stance, the no-slip assumption gives:
+		\[
+		p_{F,W} \approx \text{constant}
+		\]
+		
+		\item When a new stance foot is detected, initialize its world position as:
+		\[
+		p_{F,W} = p_W + R_{WB}p_{F,B}
+		\]
+		
+		\item Here:
+		\begin{itemize}
+			\item $p_{F,B}$ is the measured foot position in the body frame.
+			\item $p_{F,W}$ is the stored foot anchor in the world frame.
+		\end{itemize}
+		
+		\item When contact ends, the corresponding foot state is removed.
+	\end{itemize}
+	
+	\begin{block}{Note}
+		A swing foot should not be treated as fixed, because it moves relative to the world.
+	\end{block}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Useful Operator: Skew Matrix}
+	
+	\begin{itemize}
+		\item The skew matrix represents the cross product:
+		\[
+		[a]_\times b = a \times b
+		\]
+		
+		\item For
+		\[
+		a =
+		\begin{bmatrix}
+			a_x \\ a_y \\ a_z
+		\end{bmatrix},
+		\]
+		the skew matrix is:
+		\[
+		[a]_\times =
+		\begin{bmatrix}
+			0 & -a_z & a_y \\
+			a_z & 0 & -a_x \\
+			-a_y & a_x & 0
+		\end{bmatrix}
+		\]
+		
+		\item Small rotations are applied using the \textbf{matrix exponential}:
+		\[
+		R_{\text{new}} = R\exp([\delta\theta]_\times)
+		\]
+	\end{itemize}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Prediction Step: Orientation}
+	
+	\begin{itemize}
+		\item The \textbf{gyroscope} measures angular velocity in the \textbf{body frame}:
+		\[
+		\omega_B =
+		\begin{bmatrix}
+			\omega_x & \omega_y & \omega_z
+		\end{bmatrix}^T
+		\]
+		
+		\item Over one time step $\Delta t$, compute:
+		\[
+		\Delta R = \exp([\omega_B]_\times \Delta t)
+		\]
+		
+		\item Propagate orientation:
+		\[
+		R_{WB,k} = R_{WB,k-1}\Delta R
+		\]
+	\end{itemize}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Prediction Step: Acceleration, Velocity, Position}
+	
+	\begin{itemize}
+		\item The \textbf{accelerometer} measures specific force in the \textbf{body frame}.
+		\item Rotate it into the world frame and add gravity:
+		\[
+		a_W = R_{WB,k}a_B + g_W
+		\]
+		
+		\item Propagate velocity:
+		\[
+		v_{W,k} = v_{W,k-1} + a_W\Delta t
+		\]
+		
+		\item Propagate position:
+		\[
+		p_{W,k} =
+		p_{W,k-1}
+		+ v_{W,k-1}\Delta t
+		+ \frac{1}{2}a_W\Delta t^2
+		\]
+		
+	\end{itemize}
+	
+\end{frame}
+
+\begin{frame}
+	\frametitle{Prediction Step: Error-State Jacobian}
+	
+	\begin{itemize}
+		\item Covariance propagation:
+		\begin{equation*}
+			P_k^- = F_k P_{k-1} F_k^T + Q
+		\end{equation*}
+		
+		\item \textbf{Error-state vector}, where $\delta p_F$ are the stacked errors of all active feet:
+		\begin{equation*}
+			\delta x =
+			\begin{bmatrix}
+				\delta\theta & \delta v & \delta p & \delta p_F
+			\end{bmatrix}^T
+		\end{equation*}
+		
+	\item \textbf{Jacobian} from linearization ($F_{ab} = \frac{\partial a}{\partial b}$):
+	\vspace{-0.2cm}
+	\begin{columns}[T]
+		\begin{column}{0.25\textwidth}
+			\begin{equation*}
+				F =
+				\begin{bmatrix}
+					F_{\theta\theta} & 0 & 0 & 0 \\
+					F_{v\theta} & I & 0 & 0 \\
+					F_{p\theta} & F_{pv} & I & 0 \\
+					0 & 0 & 0 & I
+				\end{bmatrix}
+			\end{equation*}
+		\end{column}
+		
+		\begin{column}{0.65\textwidth}
+			\begin{equation*}
+				\begin{aligned}
+					F_{\theta\theta} &= \Delta R^T 
+					&\qquad
+					F_{v\theta} &= -R_{WB,k}[a_B]_\times \Delta t \\
+					F_{p\theta} &= -\frac{1}{2}R_{WB,k}[a_B]_\times \Delta t^2 
+					&\qquad
+					F_{pv} &= I\,\Delta t
+				\end{aligned}
+			\end{equation*}
+		\end{column}
+	\end{columns}
+		
+		\item Process noise $Q$ captures model uncertainty:
+		\begin{equation*}
+			Q = \mathrm{diag}(Q_\theta,\; Q_v,\; Q_p)
+		\end{equation*}
+	\end{itemize}
+	
+\end{frame}
+
+
+
+\begin{frame}
+	\frametitle{Contact Update: Measurement Model}
+	
+	\begin{itemize}
+		\item For a stance foot, predict the foot position from the current base estimate:
+		\[
+		\hat{p}_{F,W}
+		=
+		p_W + R_{WB}p_{F,B}
+		\]
+		
+		\item Compare this with the stored foot anchor:
+		\[
+		r =
+		\hat{p}_{F,W} - p_{F,W}
+		\]
+		
+		\item If the foot is really fixed, this residual should be close to zero.
+		
+		\item The EKF update uses this residual to correct:
+		\begin{itemize}
+			\item base orientation,
+			\item base position,
+			\item foot anchor position.
+		\end{itemize}
+	\end{itemize}
+	
+	\begin{block}{Key assumption}
+		The stance foot does not slip.
+	\end{block}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Contact Update: Measurement Jacobian}
+	
+	\begin{itemize}
+		\item The residual is:
+		\[
+		r =
+		p_W + R_{WB}p_{F,B} - p_{F,W}
+		\]
+		
+		\item Linearized with respect to the error state:
+		\[
+		H =
+		\begin{bmatrix}
+			H_\theta & H_v & H_p & H_{p_F}
+		\end{bmatrix}
+		\]
+		
+		\item Main blocks:
+		\[
+		H_\theta = -R_{WB}[p_{F,B}]_\times,\quad
+		H_v = 0,\quad
+		H_p = I,\quad
+		H_{p_F} = -I
+		\]
+		
+		\item \textit{Remark:} The orientation Jacobian $H_\theta$ can be unreliable in real world scenarios due to foot slip, imperfect contact detection, kinematic modeling errors, compliance and soft ground, frame misalignment, etc.
+		
+		\item For robustness, set $H_\theta = 0$ on real data. Position terms still constrain the base:
+		\[
+		H_p = I,\quad H_{p_F} = -I
+		\]
+	\end{itemize}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Contact Update: Kalman Correction}
+	
+	\begin{itemize}
+		\item Innovation covariance:
+		\[
+		S = HP^-H^T + R
+		\]
+		
+		\item Kalman gain:
+		\[
+		K = P^-H^TS^{-1}
+		\]
+		
+		\item Error-state correction:
+		\[
+		\delta x = -Kr
+		\]
+		
+		\item Inject the correction:
+		\[
+		R_{WB} \leftarrow R_{WB}\exp([\delta\theta]_\times)
+		\]
+		\[
+		v_W \leftarrow v_W + \delta v
+		\]
+		\[
+		p_W \leftarrow p_W + \delta p
+		\]
+		\[
+		p_{F,W} \leftarrow p_{F,W} + \delta p_F
+		\]
+	\end{itemize}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Contact Update: Covariance}
+	
+	\begin{itemize}
+		\item Use the Joseph-form covariance update:
+		\[
+		P =
+		(I-KH)P^-(I-KH)^T
+		+
+		KRK^T
+		\]
+		
+		\item This is more numerically stable than:
+		\[
+		P = (I-KH)P^-
+		\]
+		
+		\item It helps preserve:
+		\[
+		P = P^T,
+		\qquad
+		P \succeq 0
+		\]
+		
+		\item In code, symmetrize after the update:
+		\[
+		P \leftarrow \frac{1}{2}(P + P^T)
+		\]
+	\end{itemize}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{What Can Go Wrong?}
+	
+	\begin{itemize}
+		\item \textbf{IMU noise}: causes random drift after integration.
+		
+		\item \textbf{IMU bias}: causes systematic drift, often much worse than noise.
+		
+		\item \textbf{No contact}: the robot is temporarily dead-reckoning from IMU only.
+		
+		\item \textbf{Foot slip}: violates the fixed-contact assumption.
+		
+		\item \textbf{Wrong noise tuning}:
+		\begin{itemize}
+			\item small $Q$: filter trusts prediction too much
+			\item large $R$: filter ignores foot updates
+			\item small $R$: filter over-trusts possibly slipping contacts
+		\end{itemize}
+	\end{itemize}
+	
+\end{frame}
+
+\section{Tutorial Tasks}
+\begin{frame}
+	\frametitle{Tutorial Workflow}
+	
+	\begin{enumerate}
+		\item Run the provided simulation and inspect the data.
+		\item Visualize the EKF state and active foot states.
+		\item Implement IMU prediction.
+		\item Test IMU-only estimation.
+		\item Add IMU noise and bias.
+		\item Implement foot-contact correction.
+		\item Add foot slip and observe failure cases.
+		\item Tune $Q$ and $R$.
+		\item Visualize covariance ellipses.
+		\item Apply the same estimator to real quadruped data.
+	\end{enumerate}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Task 1--2: Data and State Inspection}
+	
+	\begin{itemize}
+		\item Start with synthetic data. This provides ground truth for evaluation as follows:
+		\[
+		e_p(t) = p_{\text{est}}(t) - p_{\text{gt}}(t)
+		\]
+		\[
+		\mathrm{RMSE}
+		=
+		\sqrt{
+			\frac{1}{N}
+			\sum_{k=1}^{N}
+			\|e_p(k)\|^2
+		}
+		\]
+		
+		\item Inspect the initialized state:
+		\[
+		x =
+		[R_{WB}, v_W, p_W]
+		\]
+		
+		\item Then add stance-foot states using contact information:
+		\[
+		x =
+		[R_{WB}, v_W, p_W, p^{(1)}_{F,W}, \ldots]
+		\]
+	\end{itemize}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Task 3: Implement IMU Propagation}
+	
+	\begin{enumerate}
+		\item Propagate orientation:
+		\[
+		R_k = R_{k-1}\exp([\omega_k]_\times\Delta t)
+		\]
+		
+		\item Compute world-frame acceleration:
+		\[
+		a_W = R_ka_B + g_W
+		\]
+		
+		\item Integrate velocity:
+		\[
+		v_k = v_{k-1} + a_W\Delta t
+		\]
+		
+		\item Integrate position:
+		\[
+		p_k =
+		p_{k-1}
+		+ v_{k-1}\Delta t
+		+ \frac{1}{2}a_W\Delta t^2
+		\]
+		
+		\item Build $F_k$ and propagate:
+		\[
+		P_k^- = F_kP_{k-1}F_k^T + Q
+		\]
+	\end{enumerate}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Task 4--5: IMU Noise and Bias}
+	
+	\begin{itemize}
+		\item Add random IMU noise (zero-mean Gaussian noise $w_a, w_\omega$):
+		\[
+		a_m = a + w_a,
+		\qquad
+		\omega_m = \omega + w_\omega
+		\]
+		
+		\item Add systematic IMU bias ($b_a, b_\omega$):
+		\[
+		a_m = a + b_a + w_a
+		\]
+		\[
+		\omega_m = \omega + b_\omega + w_\omega
+		\]
+		
+		\pause
+		\textbf{Answers}
+		\item Noise causes drift because acceleration and angular velocity are integrated.
+		\item Bias causes larger long-term drift due to accumulation over time.
+		
+		\item Gyro bias is especially harmful:
+		\[
+		\omega_m = \omega + b_\omega
+		\Rightarrow
+		R_{WB} \text{ drifts over time}
+		\Rightarrow
+		a_W \text{ is rotated incorrectly}
+		\Rightarrow
+		p_W \text{ drifts}
+		\]
+	\end{itemize}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Task 6: Implement Foot-Contact Correction}
+	
+	\begin{enumerate}
+		\item Compute predicted foot position:
+		\[
+		\hat{p}_{F,W} = p_W + R_{WB}p_{F,B}
+		\]
+		
+		\item Compute residual:
+		\[
+		r = \hat{p}_{F,W} - p_{F,W}
+		\]
+		
+		\item Build measurement Jacobian:
+		\[
+		H =
+		\begin{bmatrix}
+			-R_{WB}[p_{F,B}]_\times
+			&
+			0
+			&
+			I
+			&
+			-I
+		\end{bmatrix}
+		\]
+		
+		\item Compute:
+		\[
+		S = HP^-H^T + R,
+		\qquad
+		K = P^-H^TS^{-1}
+		\]
+		
+		\item Correct state:
+		\[
+		\delta x = -Kr
+		\]
+		
+		\item Update covariance using Joseph form.
+	\end{enumerate}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Task 7: Foot Slip}
+	
+	\begin{itemize}
+		\item Introduce foot slip in the simulation.
+		
+		\pause
+		\textbf{Answer}
+		\item The contact update assumes:
+		\[
+		p_{F,W} \approx \text{constant}
+		\]
+		
+		\item Foot slip violates this assumption:
+		\[
+		p_{F,W}(t + \Delta t) \neq p_{F,W}(t)
+		\]
+		
+		\item Then the residual is no longer caused only by state-estimation error.
+		\item The EKF may apply a wrong correction:
+		\[
+		\delta x = -Kr
+		\]
+		
+		\item Result:
+		\begin{itemize}
+			\item position error can increase,
+			\item orientation can be pulled in the wrong direction,
+			\item covariance can become overconfident,
+			\item the estimate can become inconsistent.
+		\end{itemize}
+	\end{itemize}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Task 8: Tuning $Q$ and $R$}
+	
+	\begin{itemize}
+		\item Process noise $Q$ controls trust in prediction:
+		\[
+		P^- = FP F^T + Q
+		\]
+		
+		\item Measurement noise $R$ controls trust in contact updates:
+		\[
+		S = HP^-H^T + R
+		\]
+		
+		\pause
+		\textbf{Answer}
+		\item If $Q$ is too small:
+		\begin{itemize}
+			\item the filter trusts the IMU prediction too much,
+			\item covariance becomes too small,
+			\item contact corrections have too little effect.
+		\end{itemize}
+		
+		\item If $R$ is too large:
+		\begin{itemize}
+			\item the filter ignores foot contacts,
+			\item behavior approaches IMU-only dead reckoning.
+		\end{itemize}
+		
+		\item If $R$ is too small:
+		\begin{itemize}
+			\item the filter over-trusts contacts,
+			\item foot slip can strongly corrupt the estimate.
+		\end{itemize}
+	\end{itemize}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Task 9: Covariance Ellipses}
+	
+	\begin{itemize}
+		\item The position covariance in the $x$-$y$ plane is:
+		\[
+		P_{xy}
+		=
+		\begin{bmatrix}
+			P_{xx} & P_{xy} \\
+			P_{yx} & P_{yy}
+		\end{bmatrix}
+		\]
+		
+		\item Covariance ellipses visualize uncertainty.
+		
+		\pause
+		\textbf{Answer}
+		
+		\item Ellipse size $\sim$ uncertainty (larger = higher, smaller = lower)		
+		\item IMU-only prediction - $P$ grows; Contact updates - $P$ shrinks.		
+		\item During flight phases, no foot anchor is available, so uncertainty grows.
+	\end{itemize}
+	
+\end{frame}
+
+
+\begin{frame}
+	\frametitle{Task 10: Real Data}
+	
+	\begin{itemize}	
+		
+		\item Apply the same EKF for real world data and tune the $Q$ and $R$ noise parameters.
+		
+		\pause
+		\textbf{Answer}
+		\item Real data is harder than simulation because of:
+		\begin{itemize}
+			\item IMU bias and calibration errors,
+			\item time synchronization errors,
+			\item imperfect contact detection,
+			\item compliance and impacts,
+			\item kinematic errors,
+			\item foot slip,
+			\item uneven terrain.
+		\end{itemize}
+		
+		\item For rough terrain, possible improvements include:
+		\begin{itemize}
+			\item contact probability estimation,
+			\item slip detection,
+			\item IMU bias estimation,
+			\item adaptive measurement noise,
+			\item visual or LiDAR odometry fusion.
+		\end{itemize}
+	\end{itemize}
+	
+\end{frame}
+
+\section{Conclusion}
+\begin{frame}
+	\frametitle{Key Takeaways}
+	
+	\begin{itemize}
+		\item EKF combines:
+		\begin{itemize}
+			\item IMU-based prediction (drift-prone),
+			\item contact-based corrections (drift-reducing).
+		\end{itemize}
+		
+		\item Stance feet act as temporary world-frame anchors.
+		
+		\item Performance depends strongly on:
+		\begin{itemize}
+			\item noise tuning ($Q$, $R$),
+			\item contact quality (slip, detection),
+			\item modeling assumptions.
+		\end{itemize}
+		
+		\item Real-world data is more challenging than simulation.
+		
+		\item Error-state formulation enables efficient handling of orientation in $\mathrm{SO}(3)$.
+	\end{itemize}
+	
+\end{frame}
+
+\end{document}
