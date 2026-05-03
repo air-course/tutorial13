@@ -3,6 +3,12 @@
 \useoutertheme{miniframes}
 \usecolortheme{default}
 
+\setbeamertemplate{headline}{
+	\begin{beamercolorbox}[wd=\paperwidth,ht=3ex,dp=2.5ex]{section in head/foot}
+		{\scriptsize \insertnavigation{\paperwidth}}
+	\end{beamercolorbox}
+}
+
 \usepackage{amsmath,amssymb,bm}
 \usepackage{mathtools}
 \usepackage{booktabs}
@@ -630,11 +636,7 @@
 		
 		\pause
 		\textbf{Answer}
-		\item The contact update assumes:
-		\[
-		p_{F,W} \approx \text{constant}
-		\]
-		
+		\item The contact update assumes $p_{F,W} \approx \text{constant}$.		
 		\item Foot slip violates this assumption:
 		\[
 		p_{F,W}(t + \Delta t) \neq p_{F,W}(t)
@@ -644,8 +646,7 @@
 		\item The EKF may apply a wrong correction:
 		\[
 		\delta x = -Kr
-		\]
-		
+		\]		
 		\item Result:
 		\begin{itemize}
 			\item position error can increase,
@@ -672,7 +673,7 @@
 		S = HP^-H^T + R
 		\]
 		
-		\pause
+		\vspace{-0.4cm} \pause
 		\textbf{Answer}
 		\item If $Q$ is too small:
 		\begin{itemize}
