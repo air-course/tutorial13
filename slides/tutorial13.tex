@@ -89,15 +89,15 @@
 		\ldots
 		\right]
 		\]
-		
-		\item $R_{WB} \in \mathrm{SO}(3)$: rotation from body frame $\{B\}$ to world frame $\{W\}$.
-		\item $v_W$: base velocity in world frame.
-		\item $p_W$: base position in world frame.
-		\item $p^{(i)}_{F,W}$: world-frame position of foot $i$ during stance.
-		
+		\vspace{-0.2cm}
+		\begin{itemize}
+			\item $R_{WB} \in \mathrm{SO}(3)$: rotation from body frame $\{B\}$ to world frame $\{W\}$.
+			\item $v_W$: base velocity in world frame.
+			\item $p_W$: base position in world frame.
+			\item $p^{(i)}_{F,W}$: world-frame position of foot $i$ during stance.
+		\end{itemize}
 		\vspace{0.2cm}
-		
-		\item The covariance is defined over an \textbf{error (perturbation) state}:
+		\item The covariance is defined over an \textbf{error (perturbation) state} $\delta x$:
 		\[
 		\delta x =
 		\left[
@@ -110,10 +110,13 @@
 		\right]
 		\]
 		
-		\item $\delta\theta \in \mathbb{R}^3$ is a \textbf{minimal representation of orientation error} on $\mathrm{SO}(3)$.
+		\item \textbf{Error-state EKF}: the filter estimates a small correction $\delta x$ and injects it into the state, ensuring consistent handling of orientation on $\mathrm{SO}(3)$.
+		
 	\end{itemize}
 	
 \end{frame}
+
+
 
 \begin{frame}
 	\frametitle{Contact-Dependent Foot States}
@@ -251,41 +254,41 @@
 			\end{bmatrix}^T
 		\end{equation*}
 		
-	\item \textbf{Jacobian} from linearization ($F_{ab} = \frac{\partial a}{\partial b}$):
-	\vspace{-0.2cm}
-	\begin{columns}[T]
-		\begin{column}{0.25\textwidth}
-			\begin{equation*}
-				F =
-				\begin{bmatrix}
-					F_{\theta\theta} & 0 & 0 & 0 \\
-					F_{v\theta} & I & 0 & 0 \\
-					F_{p\theta} & F_{pv} & I & 0 \\
-					0 & 0 & 0 & I
-				\end{bmatrix}
-			\end{equation*}
-		\end{column}
+		\item \textbf{Process Jacobian} $F_k = \left.\frac{\partial f}{\partial x}\right|_{\hat{x}_{k-1}}$ used to propagate the error state $\delta x_k \approx F_k \delta x_{k-1}$:
 		
-		\begin{column}{0.65\textwidth}
-			\begin{equation*}
-				\begin{aligned}
-					F_{\theta\theta} &= \Delta R^T 
-					&\qquad
-					F_{v\theta} &= -R_{WB,k}[a_B]_\times \Delta t \\
-					F_{p\theta} &= -\frac{1}{2}R_{WB,k}[a_B]_\times \Delta t^2 
-					&\qquad
-					F_{pv} &= I\,\Delta t
-				\end{aligned}
-			\end{equation*}
-		\end{column}
-	\end{columns}
+		\vspace{-0.2cm}
+		\begin{columns}[T]
+			\begin{column}{0.25\textwidth}
+				\begin{equation*}
+					F_k =
+					\begin{bmatrix}
+						F_{\theta\theta} & 0 & 0 & 0 \\
+						F_{v\theta} & I & 0 & 0 \\
+						F_{p\theta} & F_{pv} & I & 0 \\
+						0 & 0 & 0 & I
+					\end{bmatrix}
+				\end{equation*}
+			\end{column}
+			
+			\begin{column}{0.65\textwidth}
+				\begin{equation*}
+					\begin{aligned}
+						F_{\theta\theta} &= \Delta R^T 
+						&\qquad
+						F_{v\theta} &= -R_{WB,k}[a_B]_\times \Delta t \\
+						F_{p\theta} &= -\frac{1}{2}R_{WB,k}[a_B]_\times \Delta t^2 
+						&\qquad
+						F_{pv} &= I\,\Delta t
+					\end{aligned}
+				\end{equation*}
+			\end{column}
+		\end{columns}
 		
 		\item Process noise $Q$ captures model uncertainty:
 		\begin{equation*}
 			Q = \mathrm{diag}(Q_\theta,\; Q_v,\; Q_p)
 		\end{equation*}
-	\end{itemize}
-	
+	\end{itemize}	
 \end{frame}
 
 
@@ -334,7 +337,7 @@
 		p_W + R_{WB}p_{F,B} - p_{F,W}
 		\]
 		
-		\item Linearized with respect to the error state:
+		\item \textbf{Measurement Jacobian} $H_k = \left.\frac{\partial h}{\partial x}\right|_{\hat{x}_k^-}$ maps the error state to the residual $r_k \approx H_k \delta x_k$:
 		\[
 		H =
 		\begin{bmatrix}
@@ -352,7 +355,7 @@
 		
 		\item \textit{Remark:} The orientation Jacobian $H_\theta$ can be unreliable in real world scenarios due to foot slip, imperfect contact detection, kinematic modeling errors, compliance and soft ground, frame misalignment, etc.
 		
-		\item For robustness, set $H_\theta = 0$ on real data. Position terms still constrain the base:
+		\item For robustness, set $H_\theta = 0$ on real data. Position terms still constrain the base position:
 		\[
 		H_p = I,\quad H_{p_F} = -I
 		\]
